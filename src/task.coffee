@@ -66,7 +66,9 @@ class Task
     @on "task:log", -> console.log(arguments...)
     @on "task:warn", -> console.warn(arguments...)
     @on "task:error", -> console.error(arguments...)
-    @on "task:completed", (args...) => @callback?(args...)
+    @on "task:completed", (args...) =>
+      expect('completed').toBe true
+      @callback?(args...)
 
     @handleEvents()
 

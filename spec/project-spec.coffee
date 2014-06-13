@@ -248,6 +248,7 @@ describe "Project", ->
 
         waitsForPromise ->
           atom.project.replace /items/gi, 'items', [commentFilePath], (result) ->
+            expect('callback').toBe 'called'
             results.push(result)
 
         runs ->
