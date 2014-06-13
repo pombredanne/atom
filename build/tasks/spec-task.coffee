@@ -11,6 +11,8 @@ module.exports = (grunt) ->
   packageSpecQueue = null
 
   runPackageSpecs = (callback) ->
+    return callback(null, [])
+
     failedPackages = []
     rootDir = grunt.config.get('atom.shellAppDir')
     contentsDir = grunt.config.get('atom.contentsDir')

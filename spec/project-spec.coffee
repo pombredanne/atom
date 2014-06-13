@@ -218,7 +218,7 @@ describe "Project", ->
           expect(results[0].replacements).toBe 6
 
     describe "when a buffer is already open", ->
-      it "replaces properly and saves when not modified", ->
+      fit "replaces properly and saves when not modified", ->
         editor = null
         results = []
 
