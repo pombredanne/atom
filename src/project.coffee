@@ -279,6 +279,7 @@ class Project extends Model
       flags += 'i' if regex.ignoreCase
 
       task = Task.once require.resolve('./replace-handler'), outOfProcessPaths, regex.source, flags, replacementText, ->
+        expect('task callback').toBe 'called'
         outOfProcessFinished = true
         checkFinished()
 
