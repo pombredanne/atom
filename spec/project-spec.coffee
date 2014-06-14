@@ -210,7 +210,6 @@ describe "Project", ->
         results = []
         waitsForPromise ->
           atom.project.replace /items/gi, 'items', [filePath], (result) ->
-            expect('callback').toBe 'called'
             results.push(result)
 
         runs ->
