@@ -8,6 +8,7 @@ module.exports = (filePaths, regexSource, regexFlags, replacementText) ->
 
   replacer.on 'path-replaced', (result) ->
     emit('replace:path-replaced', result)
+    callback()
 
   replacer.replacePaths regex, replacementText, filePaths, ->
     callback()
