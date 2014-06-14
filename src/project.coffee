@@ -76,7 +76,7 @@ class Project extends Model
       @rootDirectory = new Directory(directory)
       if @repo = Git.open(directory, project: this)
         @repo.refreshIndex()
-        @repo.refreshStatus()
+        # @repo.refreshStatus()
     else
       @rootDirectory = null
 
