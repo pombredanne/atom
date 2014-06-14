@@ -206,10 +206,11 @@ describe "Project", ->
       fs.writeFileSync(commentFilePath, sampleCommentContent)
 
     describe "when called with unopened files", ->
-      it "replaces properly", ->
+      fit "replaces properly", ->
         results = []
         waitsForPromise ->
           atom.project.replace /items/gi, 'items', [filePath], (result) ->
+            expect('callback').toBe 'called'
             results.push(result)
 
         runs ->
@@ -218,7 +219,7 @@ describe "Project", ->
           expect(results[0].replacements).toBe 6
 
     describe "when a buffer is already open", ->
-      fit "replaces properly and saves when not modified", ->
+      it "replaces properly and saves when not modified", ->
         editor = null
         results = []
 
@@ -248,7 +249,6 @@ describe "Project", ->
 
         waitsForPromise ->
           atom.project.replace /items/gi, 'items', [commentFilePath], (result) ->
-            expect('callback').toBe 'called'
             results.push(result)
 
         runs ->
