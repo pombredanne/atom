@@ -68,6 +68,7 @@ class Task
     @on "task:error", -> console.error(arguments...)
     @on "task:completed", (args...) =>
       expect('completed').toBe true
+      expect(taskPath).toBe 'from replace'
       @callback?(args...)
 
     @handleEvents()
