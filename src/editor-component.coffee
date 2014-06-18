@@ -77,7 +77,7 @@ EditorComponent = React.createClass
 
     div className: className, style: {fontSize, lineHeight, fontFamily}, tabIndex: -1,
       GutterComponent {
-        ref: 'gutter', lineDecorations,
+        ref: 'gutter', onMouseDown: @onGutterMouseDown, lineDecorations,
         editor, renderedRowRange, maxLineNumberDigits, scrollViewHeight,
         scrollTop, scrollHeight, lineHeightInPixels, @pendingChanges, mouseWheelScreenRow
       }
@@ -501,6 +501,21 @@ EditorComponent = React.createClass
         when 3 then editor.selectLine()
 
     @selectToMousePositionUntilMouseUp(event)
+  onGutterMouseDown: (event) ->
+    return unless event.button is 0 # only handle the left mouse button
+
+    {editor} = @props
+    {shiftKey, metaKey} = event
+    clickedRow = @screenPositionForMouseEvent(event).row
+
+    if shiftKey
+      tailRow = editor.getSelection().getTailScreenPosition().row
+      if clickedRow < tailRow
+        editor.selectToScreenPosition([clickedRow, 0])
+      else
+        editor.selectToScreenPosition([clickedRow + 1, 0])
+    else
+      editor.setCursorScreenPosition([clickedRow, 0])
 
   onStylesheetsChanged: (stylesheet) ->
     @refreshScrollbars() if @containsScrollbarSelector(stylesheet)
