@@ -1,57 +1,58 @@
-React = require 'react-atom-fork'
-{div} = require 'reactionary-atom-fork'
-{debounce, toArray, isEqualForProperties, isEqual} = require 'underscore-plus'
-SubscriberMixin = require './subscriber-mixin'
-CursorComponent = require './cursor-component'
-
 module.exports =
-CursorsComponent = React.createClass
-  displayName: 'CursorsComponent'
-  mixins: [SubscriberMixin]
+class CursorsComponent
+  oldState: null
 
-  cursorBlinkIntervalHandle: null
+  constructor: ->
+    @cursorNodesById = {}
+    @domNode = document.createElement('div')
+    @domNode.classList.add('cursors')
 
-  render: ->
-    {editor, cursorScreenRanges, scrollTop, scrollLeft, defaultCharWidth} = @props
-    {blinkOff} = @state
+  getDomNode: ->
+    @domNode
 
-    className = 'cursors'
-    className += ' blink-off' if blinkOff
+  updateSync: (state) ->
+    newState = state.content
+    @oldState ?= {cursors: {}}
 
-    div {className},
-      if @isMounted()
-        for key, screenRange of cursorScreenRanges
-          CursorComponent({key, editor, screenRange, scrollTop, scrollLeft, defaultCharWidth})
+    # update blink class
+    if newState.cursorsVisible isnt @oldState.cursorsVisible
+      if newState.cursorsVisible
+        @domNode.classList.remove 'blink-off'
+      else
+        @domNode.classList.add 'blink-off'
+      @oldState.cursorsVisible = newState.cursorsVisible
 
-  getInitialState: ->
-    blinkOff: false
+    # remove cursors
+    for id of @oldState.cursors
+      unless newState.cursors[id]?
+        @cursorNodesById[id].remove()
+        delete @cursorNodesById[id]
+        delete @oldState.cursors[id]
 
-  componentDidMount: ->
-    @startBlinkingCursors()
+    # add or update cursors
+    for id, cursorState of newState.cursors
+      unless @oldState.cursors[id]?
+        cursorNode = document.createElement('div')
+        cursorNode.classList.add('cursor')
+        @cursorNodesById[id] = cursorNode
+        @domNode.appendChild(cursorNode)
+      @updateCursorNode(id, cursorState)
 
-  componentWillUnmount: ->
-    @stopBlinkingCursors()
+    return
 
-  shouldComponentUpdate: (newProps, newState) ->
-    not newState.blinkOff is @state.blinkOff or
-      not isEqualForProperties(newProps, @props, 'cursorScreenRanges', 'scrollTop', 'scrollLeft', 'lineHeightInPixels', 'defaultCharWidth')
+  updateCursorNode: (id, newCursorState) ->
+    cursorNode = @cursorNodesById[id]
+    oldCursorState = (@oldState.cursors[id] ?= {})
 
-  componentWillUpdate: (newProps) ->
-    @pauseCursorBlinking() if @props.cursorScreenRanges and not isEqual(newProps.cursorScreenRanges, @props.cursorScreenRanges)
+    if newCursorState.top isnt oldCursorState.top or newCursorState.left isnt oldCursorState.left
+      cursorNode.style['-webkit-transform'] = "translate(#{newCursorState.left}px, #{newCursorState.top}px)"
+      oldCursorState.top = newCursorState.top
+      oldCursorState.left = newCursorState.left
 
-  startBlinkingCursors: ->
-    @toggleCursorBlinkHandle = setInterval(@toggleCursorBlink, @props.cursorBlinkPeriod / 2) if @isMounted()
+    if newCursorState.height isnt oldCursorState.height
+      cursorNode.style.height = newCursorState.height + 'px'
+      oldCursorState.height = newCursorState.height
 
-  startBlinkingCursorsAfterDelay: null # Created lazily
-
-  stopBlinkingCursors: ->
-    clearInterval(@toggleCursorBlinkHandle)
-
-  toggleCursorBlink: ->
-    @setState(blinkOff: not @state.blinkOff)
-
-  pauseCursorBlinking: ->
-    @state.blinkOff = false
-    @stopBlinkingCursors()
-    @startBlinkingCursorsAfterDelay ?= debounce(@startBlinkingCursors, @props.cursorBlinkResumeDelay)
-    @startBlinkingCursorsAfterDelay()
+    if newCursorState.width isnt oldCursorState.width
+      cursorNode.style.width = newCursorState.width + 'px'
+      oldCursorState.width = newCursorState.width

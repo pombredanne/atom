@@ -1,7 +1,6 @@
 'body':
   # Atom Specific
   'enter': 'core:confirm'
-  'num-enter': 'core:confirm'
   'escape': 'core:cancel'
   'up': 'core:move-up'
   'down': 'core:move-down'
@@ -11,10 +10,14 @@
   'ctrl-shift-i': 'window:toggle-dev-tools'
   'ctrl-alt-p': 'window:run-package-specs'
   'ctrl-alt-s': 'application:run-all-specs'
-  'ctrl-shift-o': 'application:open-dev'
+  'ctrl-shift-o': 'application:open-folder'
+  'ctrl-alt-o': 'application:add-project-folder'
+  'ctrl-shift-pageup': 'pane:move-item-left'
+  'ctrl-shift-pagedown': 'pane:move-item-right'
   'F11': 'window:toggle-full-screen'
 
   # Sublime Parity
+  'ctrl-,': 'application:show-settings'
   'ctrl-N': 'application:new-window'
   'ctrl-W': 'window:close'
   'ctrl-o': 'application:open-file'
@@ -26,6 +29,7 @@
   'ctrl-w': 'core:close'
   'ctrl-z': 'core:undo'
   'ctrl-y': 'core:redo'
+  'ctrl-shift-z': 'core:redo'
   'ctrl-x': 'core:cut'
   'ctrl-c': 'core:copy'
   'ctrl-v': 'core:paste'
@@ -35,14 +39,20 @@
   'shift-down': 'core:select-down'
   'shift-left': 'core:select-left'
   'shift-right': 'core:select-right'
+  'shift-pageup': 'core:select-page-up'
+  'shift-pagedown': 'core:select-page-down'
   'delete': 'core:delete'
-  'shift-delete': 'core:delete'
+  'shift-delete': 'core:cut'
   'pageup': 'core:page-up'
   'pagedown': 'core:page-down'
   'backspace': 'core:backspace'
   'shift-backspace': 'core:backspace'
   'ctrl-tab': 'pane:show-next-item'
   'ctrl-shift-tab': 'pane:show-previous-item'
+  'ctrl-pageup': 'pane:show-previous-item'
+  'ctrl-pagedown': 'pane:show-next-item'
+  'ctrl-up': 'core:move-up'
+  'ctrl-down': 'core:move-down'
   'ctrl-shift-up': 'core:move-up'
   'ctrl-shift-down': 'core:move-down'
   'ctrl-=': 'window:increase-font-size'
@@ -73,7 +83,7 @@
   'alt-8': 'pane:show-item-8'
   'alt-9': 'pane:show-item-9'
 
-'.workspace .editor':
+'atom-workspace atom-text-editor':
   # Platform Bindings
   'ctrl-left': 'editor:move-to-beginning-of-word'
   'ctrl-right': 'editor:move-to-end-of-word'
@@ -85,14 +95,21 @@
   'ctrl-end': 'core:move-to-bottom'
   'ctrl-shift-home': 'core:select-to-top'
   'ctrl-shift-end': 'core:select-to-bottom'
+  'alt-left': 'editor:move-to-previous-subword-boundary'
+  'alt-right': 'editor:move-to-next-subword-boundary'
+  'alt-shift-left': 'editor:select-to-previous-subword-boundary'
+  'alt-shift-right': 'editor:select-to-next-subword-boundary'
+  'alt-backspace': 'editor:delete-to-beginning-of-subword'
+  'alt-delete': 'editor:delete-to-end-of-subword'
 
   # Sublime Parity
   'ctrl-a': 'core:select-all'
   'ctrl-alt-shift-p': 'editor:log-cursor-scope'
   'ctrl-k ctrl-u': 'editor:upper-case'
   'ctrl-k ctrl-l': 'editor:lower-case'
+  'ctrl-l': 'editor:select-line'
 
-'.workspace .editor:not(.mini)':
+'atom-workspace atom-text-editor:not([mini])':
   # Atom specific
   'alt-ctrl-z': 'editor:checkout-head-revision'
   'ctrl-<': 'editor:scroll-to-cursor'
@@ -125,6 +142,10 @@
   'ctrl-k ctrl-7': 'editor:fold-at-indent-level-7'
   'ctrl-k ctrl-8': 'editor:fold-at-indent-level-8'
   'ctrl-k ctrl-9': 'editor:fold-at-indent-level-9'
+
+'atom-workspace atom-pane':
+  'ctrl-alt-=': 'pane:increase-size'
+  'ctrl-alt--': 'pane:decrease-size'
 
 # allow standard input fields to work correctly
 'body .native-key-bindings':

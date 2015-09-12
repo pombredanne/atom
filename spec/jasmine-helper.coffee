@@ -1,10 +1,13 @@
 fs = require 'fs'
 
 module.exports.runSpecSuite = (specSuite, logFile, logErrors=true) ->
-  {$, $$} = require 'atom'
+  {$, $$} = require '../src/space-pen-extensions'
+
   window[key] = value for key, value of require '../vendor/jasmine'
 
   {TerminalReporter} = require 'jasmine-tagged'
+
+  disableFocusMethods() if process.env.JANKY_SHA1 or process.env.CI
 
   TimeReporter = require './time-reporter'
   timeReporter = new TimeReporter()
@@ -22,7 +25,17 @@ module.exports.runSpecSuite = (specSuite, logFile, logErrors=true) ->
         log(str)
       onComplete: (runner) ->
         fs.closeSync(logStream) if logStream?
-        atom.exit(runner.results().failedCount > 0 ? 1 : 0)
+        if process.env.JANKY_SHA1
+          grim = require 'grim'
+
+          if grim.getDeprecationsLength() > 0
+            grim.logDeprecations()
+            return atom.exit(1)
+
+        if runner.results().failedCount > 0
+          atom.exit(1)
+        else
+          atom.exit(0)
   else
     AtomReporter = require './atom-reporter'
     reporter = new AtomReporter()
@@ -37,3 +50,10 @@ module.exports.runSpecSuite = (specSuite, logFile, logErrors=true) ->
   $('body').append $$ -> @div id: 'jasmine-content'
 
   jasmineEnv.execute()
+
+disableFocusMethods = ->
+  ['fdescribe', 'ffdescribe', 'fffdescribe', 'fit', 'ffit', 'fffit'].forEach (methodName) ->
+    focusMethod = window[methodName]
+    window[methodName] = (description) ->
+      error = new Error('Focused spec is running on CI')
+      focusMethod description, -> throw error

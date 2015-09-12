@@ -7,7 +7,7 @@ module.exports = (grunt) ->
       grunt.fatal("Cannot copy non-existent #{source.cyan} to #{destination.cyan}")
 
     copyFile = (sourcePath, destinationPath) ->
-      return if filter?.test(sourcePath)
+      return if filter?(sourcePath) or filter?.test?(sourcePath)
 
       stats = fs.lstatSync(sourcePath)
       if stats.isSymbolicLink()
@@ -53,10 +53,11 @@ module.exports = (grunt) ->
     proc = childProcess.spawn(options.cmd, options.args, options.opts)
     proc.stdout.on 'data', (data) -> stdout.push(data.toString())
     proc.stderr.on 'data', (data) -> stderr.push(data.toString())
+    proc.on 'error', (processError) -> error ?= processError
     proc.on 'close', (exitCode, signal) ->
-      error = new Error(signal) if exitCode != 0
+      error ?= new Error(signal) if exitCode isnt 0
       results = {stderr: stderr.join(''), stdout: stdout.join(''), code: exitCode}
-      grunt.log.error results.stderr if exitCode != 0
+      grunt.log.error results.stderr if exitCode isnt 0
       callback(error, results, exitCode)
 
   isAtomPackage: (packagePath) ->

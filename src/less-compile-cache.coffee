@@ -1,14 +1,10 @@
 path = require 'path'
-fs = require 'fs-plus'
 LessCache = require 'less-cache'
-{Subscriber} = require 'emissary'
 
 # {LessCache} wrapper used by {ThemeManager} to read stylesheets.
 module.exports =
 class LessCompileCache
-  Subscriber.includeInto(this)
-
-  @cacheDir: path.join(atom.getConfigDirPath(), 'compile-cache', 'less')
+  @cacheDir: path.join(process.env.ATOM_HOME, 'compile-cache', 'less')
 
   constructor: ({resourcePath, importPaths}) ->
     @lessSearchPaths = [
@@ -30,6 +26,8 @@ class LessCompileCache
   setImportPaths: (importPaths=[]) ->
     @cache.setImportPaths(importPaths.concat(@lessSearchPaths))
 
-  read: (stylesheetPath) -> @cache.readFileSync(stylesheetPath)
+  read: (stylesheetPath) ->
+    @cache.readFileSync(stylesheetPath)
 
-  destroy: -> @unsubscribe()
+  cssForFile: (stylesheetPath, lessContent) ->
+    @cache.cssForFile(stylesheetPath, lessContent)

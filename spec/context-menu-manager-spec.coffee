@@ -1,137 +1,189 @@
-{$$} = require 'atom'
+{$$} = require '../src/space-pen-extensions'
 
 ContextMenuManager = require '../src/context-menu-manager'
 
 describe "ContextMenuManager", ->
-  [contextMenu] = []
+  [contextMenu, parent, child, grandchild] = []
 
   beforeEach ->
-    contextMenu = new ContextMenuManager
+    {resourcePath} = atom.getLoadSettings()
+    contextMenu = new ContextMenuManager({resourcePath})
 
-  describe "adding definitions", ->
-    it 'loads',  ->
-      contextMenu.add 'file-path',
-        '.selector':
-          'label': 'command'
+    parent = document.createElement("div")
+    child = document.createElement("div")
+    grandchild = document.createElement("div")
+    parent.classList.add('parent')
+    child.classList.add('child')
+    grandchild.classList.add('grandchild')
+    child.appendChild(grandchild)
+    parent.appendChild(child)
 
-      expect(contextMenu.definitions['.selector'][0].label).toEqual 'label'
-      expect(contextMenu.definitions['.selector'][0].command).toEqual 'command'
+  describe "::add(itemsBySelector)", ->
+    it "can add top-level menu items that can be removed with the returned disposable", ->
+      disposable = contextMenu.add
+        '.parent': [{label: 'A', command: 'a'}]
+        '.child': [{label: 'B', command: 'b'}]
+        '.grandchild': [{label: 'C', command: 'c'}]
 
-    it "loads submenus", ->
-      contextMenu.add 'file-path',
-        '.selector':
-          'parent':
-            'child-1': 'child-1:trigger'
-            'child-2': 'child-2:trigger'
-          'parent-2': 'parent-2:trigger'
+      expect(contextMenu.templateForElement(grandchild)).toEqual [
+        {label: 'C', command: 'c'}
+        {label: 'B', command: 'b'}
+        {label: 'A', command: 'a'}
+      ]
 
-      expect(contextMenu.definitions['.selector'].length).toBe 2
-      expect(contextMenu.definitions['.selector'][0].label).toEqual 'parent'
-      expect(contextMenu.definitions['.selector'][0].submenu.length).toBe 2
-      expect(contextMenu.definitions['.selector'][0].submenu[0].label).toBe 'child-1'
-      expect(contextMenu.definitions['.selector'][0].submenu[0].command).toBe 'child-1:trigger'
-      expect(contextMenu.definitions['.selector'][0].submenu[1].label).toBe 'child-2'
-      expect(contextMenu.definitions['.selector'][0].submenu[1].command).toBe 'child-2:trigger'
+      disposable.dispose()
+      expect(contextMenu.templateForElement(grandchild)).toEqual []
 
-    describe 'dev mode', ->
-      it 'loads',  ->
-        contextMenu.add 'file-path',
-          '.selector':
-            'label': 'command'
-        , devMode: true
+    it "can add submenu items to existing menus that can be removed with the returned disposable", ->
+      disposable1 = contextMenu.add
+        '.grandchild': [{label: 'A', submenu: [{label: 'B', command: 'b'}]}]
+      disposable2 = contextMenu.add
+        '.grandchild': [{label: 'A', submenu: [{label: 'C', command: 'c'}]}]
 
-        expect(contextMenu.devModeDefinitions['.selector'][0].label).toEqual 'label'
-        expect(contextMenu.devModeDefinitions['.selector'][0].command).toEqual 'command'
-
-  describe "building a menu template", ->
-    beforeEach ->
-      contextMenu.definitions = {
-        '.parent':[
-          label: 'parent'
-          command: 'command-p'
-         ]
-        '.child': [
-          label: 'child'
-          command: 'command-c'
+      expect(contextMenu.templateForElement(grandchild)).toEqual [{
+        label: 'A',
+        submenu: [
+          {label: 'B', command: 'b'}
+          {label: 'C', command: 'c'}
         ]
+      }]
+
+      disposable2.dispose()
+      expect(contextMenu.templateForElement(grandchild)).toEqual [{
+        label: 'A',
+        submenu: [
+          {label: 'B', command: 'b'}
+        ]
+      }]
+
+      disposable1.dispose()
+      expect(contextMenu.templateForElement(grandchild)).toEqual []
+
+    it "favors the most specific / recently added item in the case of a duplicate label", ->
+      grandchild.classList.add('foo')
+
+      disposable1 = contextMenu.add
+        '.grandchild': [{label: 'A', command: 'a'}]
+      disposable2 = contextMenu.add
+        '.grandchild.foo': [{label: 'A', command: 'b'}]
+      disposable3 = contextMenu.add
+        '.grandchild': [{label: 'A', command: 'c'}]
+      disposable4 = contextMenu.add
+        '.child': [{label: 'A', command: 'd'}]
+
+      expect(contextMenu.templateForElement(grandchild)).toEqual [{label: 'A', command: 'b'}]
+
+      disposable2.dispose()
+      expect(contextMenu.templateForElement(grandchild)).toEqual [{label: 'A', command: 'c'}]
+
+      disposable3.dispose()
+      expect(contextMenu.templateForElement(grandchild)).toEqual [{label: 'A', command: 'a'}]
+
+      disposable1.dispose()
+      expect(contextMenu.templateForElement(grandchild)).toEqual [{label: 'A', command: 'd'}]
+
+    it "allows multiple separators, but not adjacent to each other", ->
+      contextMenu.add
+        '.grandchild': [
+          {label: 'A', command: 'a'},
+          {type: 'separator'},
+          {type: 'separator'},
+          {label: 'B', command: 'b'},
+          {type: 'separator'},
+          {type: 'separator'},
+          {label: 'C', command: 'c'}
+        ]
+
+      expect(contextMenu.templateForElement(grandchild)).toEqual [
+        {label: 'A', command: 'a'},
+        {type: 'separator'},
+        {label: 'B', command: 'b'},
+        {type: 'separator'},
+        {label: 'C', command: 'c'}
+      ]
+
+    it "excludes items marked for display in devMode unless in dev mode", ->
+      disposable1 = contextMenu.add
+        '.grandchild': [{label: 'A', command: 'a', devMode: true}, {label: 'B', command: 'b', devMode: false}]
+
+      expect(contextMenu.templateForElement(grandchild)).toEqual [{label: 'B', command: 'b'}]
+
+      contextMenu.devMode = true
+      expect(contextMenu.templateForElement(grandchild)).toEqual [{label: 'A', command: 'a'}, {label: 'B', command: 'b'}]
+
+    it "allows items to be associated with `created` hooks which are invoked on template construction with the item and event", ->
+      createdEvent = null
+
+      item = {
+        label: 'A',
+        command: 'a',
+        created: (event) ->
+          @command = 'b'
+          createdEvent = event
       }
 
-      contextMenu.devModeDefinitions =
-        '.parent': [
-          label: 'dev-label'
-          command: 'dev-command'
+      contextMenu.add('.grandchild': [item])
+
+      dispatchedEvent = {target: grandchild}
+      expect(contextMenu.templateForEvent(dispatchedEvent)).toEqual [{label: 'A', command: 'b'}]
+      expect(item.command).toBe 'a' # doesn't modify original item template
+      expect(createdEvent).toBe dispatchedEvent
+
+    it "allows items to be associated with `shouldDisplay` hooks which are invoked on construction to determine whether the item should be included", ->
+      shouldDisplayEvent = null
+      shouldDisplay = true
+
+      item = {
+        label: 'A',
+        command: 'a',
+        shouldDisplay: (event) ->
+          @foo = 'bar'
+          shouldDisplayEvent = event
+          shouldDisplay
+      }
+      contextMenu.add('.grandchild': [item])
+
+      dispatchedEvent = {target: grandchild}
+      expect(contextMenu.templateForEvent(dispatchedEvent)).toEqual [{label: 'A', command: 'a'}]
+      expect(item.foo).toBeUndefined() # doesn't modify original item template
+      expect(shouldDisplayEvent).toBe dispatchedEvent
+
+      shouldDisplay = false
+      expect(contextMenu.templateForEvent(dispatchedEvent)).toEqual []
+
+    it "throws an error when the selector is invalid", ->
+      addError = null
+      try
+        contextMenu.add '<>': [{label: 'A', command: 'a'}]
+      catch error
+        addError = error
+      expect(addError.message).toContain('<>')
+
+    describe "when the menus are specified in a legacy format", ->
+      beforeEach ->
+        jasmine.snapshotDeprecations()
+
+      afterEach ->
+        jasmine.restoreDeprecationsSnapshot()
+
+      it "allows items to be specified in the legacy format for now", ->
+        contextMenu.add '.parent':
+          'A': 'a'
+          'Separator 1': '-'
+          'B':
+            'C': 'c'
+            'Separator 2': '-'
+            'D': 'd'
+
+        expect(contextMenu.templateForElement(parent)).toEqual [
+          {label: 'A', command: 'a'}
+          {type: 'separator'}
+          {
+            label: 'B'
+            submenu: [
+              {label: 'C', command: 'c'}
+              {type: 'separator'}
+              {label: 'D', command: 'd'}
+            ]
+          }
         ]
-
-    describe "on a single element", ->
-      [element] = []
-
-      beforeEach ->
-        element = ($$ -> @div class: 'parent')[0]
-
-      it "creates a menu with a single item", ->
-        menu = contextMenu.combinedMenuTemplateForElement(element)
-
-        expect(menu[0].label).toEqual 'parent'
-        expect(menu[0].command).toEqual 'command-p'
-        expect(menu[1]).toBeUndefined()
-
-      describe "in devMode", ->
-        beforeEach -> contextMenu.devMode = true
-
-        it "creates a menu with development items", ->
-          menu = contextMenu.combinedMenuTemplateForElement(element)
-
-          expect(menu[0].label).toEqual 'parent'
-          expect(menu[0].command).toEqual 'command-p'
-          expect(menu[1].type).toEqual 'separator'
-          expect(menu[2].label).toEqual 'dev-label'
-          expect(menu[2].command).toEqual 'dev-command'
-
-
-    describe "on multiple elements", ->
-      [element] = []
-
-      beforeEach ->
-        element = $$ ->
-          @div class: 'parent', =>
-            @div class: 'child'
-
-        element = element.find('.child')[0]
-
-      it "creates a menu with a two items", ->
-        menu = contextMenu.combinedMenuTemplateForElement(element)
-
-        expect(menu[0].label).toEqual 'child'
-        expect(menu[0].command).toEqual 'command-c'
-        expect(menu[1].label).toEqual 'parent'
-        expect(menu[1].command).toEqual 'command-p'
-        expect(menu[2]).toBeUndefined()
-
-      describe "in devMode", ->
-        beforeEach -> contextMenu.devMode = true
-
-        xit "creates a menu with development items", ->
-          menu = contextMenu.combinedMenuTemplateForElement(element)
-
-          expect(menu[0].label).toEqual 'child'
-          expect(menu[0].command).toEqual 'command-c'
-          expect(menu[1].label).toEqual 'parent'
-          expect(menu[1].command).toEqual 'command-p'
-          expect(menu[2].label).toEqual 'dev-label'
-          expect(menu[2].command).toEqual 'dev-command'
-          expect(menu[3]).toBeUndefined()
-
-  describe "executeBuildHandlers", ->
-    menuTemplate = [
-        label: 'label'
-        executeAtBuild: ->
-      ]
-    event =
-      target: null
-
-    it 'should invoke the executeAtBuild fn', ->
-      buildFn = spyOn(menuTemplate[0], 'executeAtBuild')
-      contextMenu.executeBuildHandlers(event, menuTemplate)
-
-      expect(buildFn).toHaveBeenCalled()
-      expect(buildFn.mostRecentCall.args[0]).toBe event

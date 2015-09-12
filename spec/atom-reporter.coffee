@@ -1,22 +1,18 @@
 path = require 'path'
 _ = require 'underscore-plus'
-{convertStackTrace} = require 'coffeestack'
 {View, $, $$} = require '../src/space-pen-extensions'
 grim = require 'grim'
+marked = require 'marked'
 
-sourceMaps = {}
 formatStackTrace = (spec, message='', stackTrace) ->
   return stackTrace unless stackTrace
 
   jasminePattern = /^\s*at\s+.*\(?.*[/\\]jasmine(-[^/\\]*)?\.js:\d+:\d+\)?\s*$/
   firstJasmineLinePattern = /^\s*at [/\\].*[/\\]jasmine(-[^/\\]*)?\.js:\d+:\d+\)?\s*$/
-  convertedLines = []
+  lines = []
   for line in stackTrace.split('\n')
-    convertedLines.push(line) unless jasminePattern.test(line)
+    lines.push(line) unless jasminePattern.test(line)
     break if firstJasmineLinePattern.test(line)
-
-  stackTrace = convertStackTrace(convertedLines.join('\n'), sourceMaps)
-  lines = stackTrace.split('\n')
 
   # Remove first line of stack when it is the same as the error message
   errorMatch = lines[0]?.match(/^Error: (.*)/)
@@ -37,7 +33,8 @@ module.exports =
 class AtomReporter extends View
   @content: ->
     @div class: 'spec-reporter', =>
-      @div outlet: "suites"
+      @div class: 'padded pull-right', =>
+        @button outlet: 'reloadButton', class: 'btn btn-small reload-button', 'Reload Specs'
       @div outlet: 'coreArea', class: 'symbol-area', =>
         @div outlet: 'coreHeader', class: 'symbol-header'
         @ul outlet: 'coreSummary', class: 'symbol-summary list-unstyled'
@@ -76,6 +73,11 @@ class AtomReporter extends View
     @addSpecs(specs)
     $(document.body).append this
 
+    @on 'click', '.stack-trace', ->
+      $(this).toggleClass('expanded')
+
+    @reloadButton.on 'click', -> require('ipc').send('call-window-method', 'restart')
+
   reportRunnerResults: (runner) ->
     @updateSpecCounts()
     @status.addClass('alert-success').removeClass('alert-info') if @failedCount is 0
@@ -107,9 +109,10 @@ class AtomReporter extends View
     for deprecation in deprecations
       @deprecationList.append $$ ->
         @div class: 'padded', =>
-          @div class: 'result-message fail deprecation-message', deprecation.message
+          @div class: 'result-message fail deprecation-message', =>
+            @raw marked(deprecation.message)
 
-          for stack in deprecation.stacks
+          for stack in deprecation.getStacks()
             fullStack = stack.map ({functionName, location}) ->
               if functionName is '<unknown>'
                 "  at #{location}"
@@ -119,14 +122,14 @@ class AtomReporter extends View
     grim.clearDeprecations()
 
   handleEvents: ->
-    $(document).on "click", ".spec-toggle", ({currentTarget}) =>
+    $(document).on "click", ".spec-toggle", ({currentTarget}) ->
       element = $(currentTarget)
       specFailures = element.parent().find('.spec-failures')
       specFailures.toggle()
       element.toggleClass('folded')
       false
 
-    $(document).on "click", ".deprecation-toggle", ({currentTarget}) =>
+    $(document).on "click", ".deprecation-toggle", ({currentTarget}) ->
       element = $(currentTarget)
       deprecationList = $(document).find('.deprecation-list')
       deprecationList.toggle()

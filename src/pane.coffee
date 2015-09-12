@@ -1,65 +1,251 @@
 {find, compact, extend, last} = require 'underscore-plus'
-{Model, Sequence} = require 'theorist'
+{Emitter} = require 'event-kit'
 Serializable = require 'serializable'
+Grim = require 'grim'
+Model = require './model'
 PaneAxis = require './pane-axis'
-Editor = require './editor'
-PaneView = null
+TextEditor = require './text-editor'
 
-# Public: A container for multiple items, one of which is *active* at a given
-# time. With the default packages, a tab is displayed for each item and the
-# active item's view is displayed.
+# Extended: A container for presenting content in the center of the workspace.
+# Panes can contain multiple items, one of which is *active* at a given time.
+# The view corresponding to the active item is displayed in the interface. In
+# the default configuration, tabs are also displayed for each item.
 module.exports =
 class Pane extends Model
   atom.deserializers.add(this)
   Serializable.includeInto(this)
 
-  @properties
-    container: undefined
-    activeItem: undefined
-    focused: false
-
-  # Public: Only one pane is considered *active* at a time. A pane is activated
-  # when it is focused, and when focus returns to the pane container after
-  # moving to another element such as a panel, it returns to the active pane.
-  @behavior 'active', ->
-    @$container
-      .switch((container) -> container?.$activePane)
-      .map((activePane) => activePane is this)
-      .distinctUntilChanged()
-
   constructor: (params) ->
     super
 
-    @items = Sequence.fromArray(compact(params?.items ? []))
-    @activeItem ?= @items[0]
+    unless Grim.includeDeprecatedAPIs
+      @container = params?.container
+      @activeItem = params?.activeItem
 
-    @subscribe @items.onEach (item) =>
-      if typeof item.on is 'function'
-        @subscribe item, 'destroyed', => @removeItem(item, true)
+    @emitter = new Emitter
+    @itemSubscriptions = new WeakMap
+    @items = []
 
-    @subscribe @items.onRemoval (item, index) =>
-      @unsubscribe item if typeof item.on is 'function'
-
-    @activate() if params?.active
+    @addItems(compact(params?.items ? []))
+    @setActiveItem(@items[0]) unless @getActiveItem()?
+    @setFlexScale(params?.flexScale ? 1)
 
   # Called by the Serializable mixin during serialization.
   serializeParams: ->
+    if typeof @activeItem?.getURI is 'function'
+      activeItemURI = @activeItem.getURI()
+    else if Grim.includeDeprecatedAPIs and typeof @activeItem?.getUri is 'function'
+      activeItemURI = @activeItem.getUri()
+
+    id: @id
     items: compact(@items.map((item) -> item.serialize?()))
-    activeItemUri: @activeItem?.getUri?()
+    activeItemURI: activeItemURI
     focused: @focused
-    active: @active
+    flexScale: @flexScale
 
   # Called by the Serializable mixin during deserialization.
   deserializeParams: (params) ->
-    {items, activeItemUri} = params
+    {items, activeItemURI, activeItemUri} = params
+    activeItemURI ?= activeItemUri
     params.items = compact(items.map (itemState) -> atom.deserializers.deserialize(itemState))
-    params.activeItem = find params.items, (item) -> item.getUri?() is activeItemUri
+    params.activeItem = find params.items, (item) ->
+      if typeof item.getURI is 'function'
+        itemURI = item.getURI()
+      else if Grim.includeDeprecatedAPIs and typeof item.getUri is 'function'
+        itemURI = item.getUri()
+
+      itemURI is activeItemURI
     params
 
-  # Called by the view layer to construct a view for this model.
-  getViewClass: -> PaneView ?= require './pane-view'
+  getParent: -> @parent
 
-  isActive: -> @active
+  setParent: (@parent) -> @parent
+
+  getContainer: -> @container
+
+  setContainer: (container) ->
+    unless container is @container
+      @container = container
+      container.didAddPane({pane: this})
+
+  setFlexScale: (@flexScale) ->
+    @emitter.emit 'did-change-flex-scale', @flexScale
+    @flexScale
+
+  getFlexScale: -> @flexScale
+
+  increaseSize: -> @setFlexScale(@getFlexScale() * 1.1)
+
+  decreaseSize: -> @setFlexScale(@getFlexScale() / 1.1)
+
+  ###
+  Section: Event Subscription
+  ###
+
+  # Public: Invoke the given callback when the pane resizes
+  #
+  # The callback will be invoked when pane's flexScale property changes.
+  # Use {::getFlexScale} to get the current value.
+  #
+  # * `callback` {Function} to be called when the pane is resized
+  #   * `flexScale` {Number} representing the panes `flex-grow`; ability for a
+  #     flex item to grow if necessary.
+  #
+  # Returns a {Disposable} on which '.dispose()' can be called to unsubscribe.
+  onDidChangeFlexScale: (callback) ->
+    @emitter.on 'did-change-flex-scale', callback
+
+  # Public: Invoke the given callback with the current and future values of
+  # {::getFlexScale}.
+  #
+  # * `callback` {Function} to be called with the current and future values of
+  #   the {::getFlexScale} property.
+  #   * `flexScale` {Number} representing the panes `flex-grow`; ability for a
+  #     flex item to grow if necessary.
+  #
+  # Returns a {Disposable} on which `.dispose()` can be called to unsubscribe.
+  observeFlexScale: (callback) ->
+    callback(@flexScale)
+    @onDidChangeFlexScale(callback)
+
+  # Public: Invoke the given callback when the pane is activated.
+  #
+  # The given callback will be invoked whenever {::activate} is called on the
+  # pane, even if it is already active at the time.
+  #
+  # * `callback` {Function} to be called when the pane is activated.
+  #
+  # Returns a {Disposable} on which `.dispose()` can be called to unsubscribe.
+  onDidActivate: (callback) ->
+    @emitter.on 'did-activate', callback
+
+  # Public: Invoke the given callback before the pane is destroyed.
+  #
+  # * `callback` {Function} to be called before the pane is destroyed.
+  #
+  # Returns a {Disposable} on which `.dispose()` can be called to unsubscribe.
+  onWillDestroy: (callback) ->
+    @emitter.on 'will-destroy', callback
+
+  # Public: Invoke the given callback when the pane is destroyed.
+  #
+  # * `callback` {Function} to be called when the pane is destroyed.
+  #
+  # Returns a {Disposable} on which `.dispose()` can be called to unsubscribe.
+  onDidDestroy: (callback) ->
+    @emitter.on 'did-destroy', callback
+
+  # Public: Invoke the given callback when the value of the {::isActive}
+  # property changes.
+  #
+  # * `callback` {Function} to be called when the value of the {::isActive}
+  #   property changes.
+  #   * `active` {Boolean} indicating whether the pane is active.
+  #
+  # Returns a {Disposable} on which `.dispose()` can be called to unsubscribe.
+  onDidChangeActive: (callback) ->
+    @container.onDidChangeActivePane (activePane) =>
+      callback(this is activePane)
+
+  # Public: Invoke the given callback with the current and future values of the
+  # {::isActive} property.
+  #
+  # * `callback` {Function} to be called with the current and future values of
+  #   the {::isActive} property.
+  #   * `active` {Boolean} indicating whether the pane is active.
+  #
+  # Returns a {Disposable} on which `.dispose()` can be called to unsubscribe.
+  observeActive: (callback) ->
+    callback(@isActive())
+    @onDidChangeActive(callback)
+
+  # Public: Invoke the given callback when an item is added to the pane.
+  #
+  # * `callback` {Function} to be called with when items are added.
+  #   * `event` {Object} with the following keys:
+  #     * `item` The added pane item.
+  #     * `index` {Number} indicating where the item is located.
+  #
+  # Returns a {Disposable} on which `.dispose()` can be called to unsubscribe.
+  onDidAddItem: (callback) ->
+    @emitter.on 'did-add-item', callback
+
+  # Public: Invoke the given callback when an item is removed from the pane.
+  #
+  # * `callback` {Function} to be called with when items are removed.
+  #   * `event` {Object} with the following keys:
+  #     * `item` The removed pane item.
+  #     * `index` {Number} indicating where the item was located.
+  #
+  # Returns a {Disposable} on which `.dispose()` can be called to unsubscribe.
+  onDidRemoveItem: (callback) ->
+    @emitter.on 'did-remove-item', callback
+
+  # Public: Invoke the given callback before an item is removed from the pane.
+  #
+  # * `callback` {Function} to be called with when items are removed.
+  #   * `event` {Object} with the following keys:
+  #     * `item` The pane item to be removed.
+  #     * `index` {Number} indicating where the item is located.
+  onWillRemoveItem: (callback) ->
+    @emitter.on 'will-remove-item', callback
+
+  # Public: Invoke the given callback when an item is moved within the pane.
+  #
+  # * `callback` {Function} to be called with when items are moved.
+  #   * `event` {Object} with the following keys:
+  #     * `item` The removed pane item.
+  #     * `oldIndex` {Number} indicating where the item was located.
+  #     * `newIndex` {Number} indicating where the item is now located.
+  #
+  # Returns a {Disposable} on which `.dispose()` can be called to unsubscribe.
+  onDidMoveItem: (callback) ->
+    @emitter.on 'did-move-item', callback
+
+  # Public: Invoke the given callback with all current and future items.
+  #
+  # * `callback` {Function} to be called with current and future items.
+  #   * `item` An item that is present in {::getItems} at the time of
+  #     subscription or that is added at some later time.
+  #
+  # Returns a {Disposable} on which `.dispose()` can be called to unsubscribe.
+  observeItems: (callback) ->
+    callback(item) for item in @getItems()
+    @onDidAddItem ({item}) -> callback(item)
+
+  # Public: Invoke the given callback when the value of {::getActiveItem}
+  # changes.
+  #
+  # * `callback` {Function} to be called with when the active item changes.
+  #   * `activeItem` The current active item.
+  #
+  # Returns a {Disposable} on which `.dispose()` can be called to unsubscribe.
+  onDidChangeActiveItem: (callback) ->
+    @emitter.on 'did-change-active-item', callback
+
+  # Public: Invoke the given callback with the current and future values of
+  # {::getActiveItem}.
+  #
+  # * `callback` {Function} to be called with the current and future active
+  #   items.
+  #   * `activeItem` The current active item.
+  #
+  # Returns a {Disposable} on which `.dispose()` can be called to unsubscribe.
+  observeActiveItem: (callback) ->
+    callback(@getActiveItem())
+    @onDidChangeActiveItem(callback)
+
+  # Public: Invoke the given callback before items are destroyed.
+  #
+  # * `callback` {Function} to be called before items are destroyed.
+  #   * `event` {Object} with the following keys:
+  #     * `item` The item that will be destroyed.
+  #     * `index` The location of the item.
+  #
+  # Returns a {Disposable} on which `.dispose()` can be called to
+  # unsubscribe.
+  onWillDestroyItem: (callback) ->
+    @emitter.on 'will-destroy-item', callback
 
   # Called by the view layer to indicate that the pane has gained focus.
   focus: ->
@@ -71,13 +257,17 @@ class Pane extends Model
     @focused = false
     true # if this is called from an event handler, don't cancel it
 
-  # Public: Makes this pane the *active* pane, causing it to gain focus
-  # immediately.
-  activate: ->
-    @container?.activePane = this
-    @emit 'activated'
+  isFocused: -> @focused
 
   getPanes: -> [this]
+
+  unsubscribeFromItem: (item) ->
+    @itemSubscriptions.get(item)?.dispose()
+    @itemSubscriptions.delete(item)
+
+  ###
+  Section: Items
+  ###
 
   # Public: Get the items in this pane.
   #
@@ -88,15 +278,23 @@ class Pane extends Model
   # Public: Get the active pane item in this pane.
   #
   # Returns a pane item.
-  getActiveItem: ->
+  getActiveItem: -> @activeItem
+
+  setActiveItem: (activeItem) ->
+    unless activeItem is @activeItem
+      @activeItem = activeItem
+      @emitter.emit 'did-change-active-item', @activeItem
     @activeItem
 
-  # Public: Returns an {Editor} if the pane item is an {Editor}, or null
-  # otherwise.
+  # Return an {TextEditor} if the pane item is an {TextEditor}, or null otherwise.
   getActiveEditor: ->
-    @activeItem if @activeItem instanceof Editor
+    @activeItem if @activeItem instanceof TextEditor
 
-  # Public: Returns the item at the specified index.
+  # Public: Return the item at the given index.
+  #
+  # * `index` {Number}
+  #
+  # Returns an item or `null` if no item exists at the given index.
   itemAtIndex: (index) ->
     @items[index]
 
@@ -116,86 +314,137 @@ class Pane extends Model
     else
       @activateItemAtIndex(@items.length - 1)
 
-  # Returns the index of the current active item.
+  # Public: Move the active tab to the right.
+  moveItemRight: ->
+    index = @getActiveItemIndex()
+    rightItemIndex = index + 1
+    @moveItem(@getActiveItem(), rightItemIndex) unless rightItemIndex > @items.length - 1
+
+  # Public: Move the active tab to the left
+  moveItemLeft: ->
+    index = @getActiveItemIndex()
+    leftItemIndex = index - 1
+    @moveItem(@getActiveItem(), leftItemIndex) unless leftItemIndex < 0
+
+  # Public: Get the index of the active item.
+  #
+  # Returns a {Number}.
   getActiveItemIndex: ->
     @items.indexOf(@activeItem)
 
-  # Makes the item at the given index active.
+  # Public: Activate the item at the given index.
+  #
+  # * `index` {Number}
   activateItemAtIndex: (index) ->
     @activateItem(@itemAtIndex(index))
 
-  # Makes the given item active, adding the item if necessary.
+  # Public: Make the given item *active*, causing it to be displayed by
+  # the pane's view.
   activateItem: (item) ->
     if item?
       @addItem(item)
-      @activeItem = item
+      @setActiveItem(item)
 
-  # Public: Adds the item to the pane.
+  # Public: Add the given item to the pane.
   #
-  # item - The item to add. It can be a model with an associated view or a view.
-  # index - An optional index at which to add the item. If omitted, the item is
-  #         added after the current active item.
+  # * `item` The item to add. It can be a model with an associated view or a
+  #   view.
+  # * `index` (optional) {Number} indicating the index at which to add the item.
+  #   If omitted, the item is added after the current active item.
   #
-  # Returns the added item
+  # Returns the added item.
   addItem: (item, index=@getActiveItemIndex() + 1) ->
+    throw new Error("Pane items must be objects. Attempted to add item #{item}.") unless item? and typeof item is 'object'
+
     return if item in @items
 
+    if typeof item.onDidDestroy is 'function'
+      @itemSubscriptions.set item, item.onDidDestroy => @removeItem(item, true)
+    else if Grim.includeDeprecatedAPIs and typeof item.on is 'function'
+      @subscribe item, 'destroyed', => @removeItem(item, true)
+
     @items.splice(index, 0, item)
-    @emit 'item-added', item, index
-    @activeItem ?= item
+    @emit 'item-added', item, index if Grim.includeDeprecatedAPIs
+    @emitter.emit 'did-add-item', {item, index}
+    @setActiveItem(item) unless @getActiveItem()?
     item
 
-  # Public: Adds the given items to the pane.
+  # Public: Add the given items to the pane.
   #
-  # items - An {Array} of items to add. Items can be models with associated
-  #         views or views. Any items that are already present in items will
-  #         not be added.
-  # index - An optional index at which to add the item. If omitted, the item is
-  #         added after the current active item.
+  # * `items` An {Array} of items to add. Items can be views or models with
+  #   associated views. Any objects that are already present in the pane's
+  #   current items will not be added again.
+  # * `index` (optional) {Number} index at which to add the items. If omitted,
+  #   the item is #   added after the current active item.
   #
-  # Returns an {Array} of the added items
+  # Returns an {Array} of added items.
   addItems: (items, index=@getActiveItemIndex() + 1) ->
     items = items.filter (item) => not (item in @items)
     @addItem(item, index + i) for item, i in items
     items
 
-  removeItem: (item, destroying) ->
+  removeItem: (item, destroyed=false) ->
     index = @items.indexOf(item)
     return if index is -1
+
+    @emitter.emit 'will-remove-item', {item, index, destroyed}
+
+    if Grim.includeDeprecatedAPIs and typeof item.on is 'function'
+      @unsubscribe item
+    @unsubscribeFromItem(item)
+
     if item is @activeItem
       if @items.length is 1
-        @activeItem = undefined
+        @setActiveItem(undefined)
       else if index is 0
         @activateNextItem()
       else
         @activatePreviousItem()
     @items.splice(index, 1)
-    @emit 'item-removed', item, index, destroying
-    @container?.itemDestroyed(item) if destroying
+    @emit 'item-removed', item, index, destroyed if Grim.includeDeprecatedAPIs
+    @emitter.emit 'did-remove-item', {item, index, destroyed}
+    @container?.didDestroyPaneItem({item, index, pane: this}) if destroyed
     @destroy() if @items.length is 0 and atom.config.get('core.destroyEmptyPanes')
 
-  # Public: Moves the given item to the specified index.
+  # Public: Move the given item to the given index.
+  #
+  # * `item` The item to move.
+  # * `index` {Number} indicating the index to which to move the item.
   moveItem: (item, newIndex) ->
     oldIndex = @items.indexOf(item)
     @items.splice(oldIndex, 1)
     @items.splice(newIndex, 0, item)
-    @emit 'item-moved', item, newIndex
+    @emit 'item-moved', item, newIndex if Grim.includeDeprecatedAPIs
+    @emitter.emit 'did-move-item', {item, oldIndex, newIndex}
 
-  # Public: Moves the given item to the given index at another pane.
+  # Public: Move the given item to the given index on another pane.
+  #
+  # * `item` The item to move.
+  # * `pane` {Pane} to which to move the item.
+  # * `index` {Number} indicating the index to which to move the item in the
+  #   given pane.
   moveItemToPane: (item, pane, index) ->
-    pane.addItem(item, index)
     @removeItem(item)
+    pane.addItem(item, index)
 
-  # Public: Destroys the currently active item and make the next item active.
+  # Public: Destroy the active item and activate the next item.
   destroyActiveItem: ->
     @destroyItem(@activeItem)
     false
 
-  # Public: Destroys the given item. If it is the active item, activate the next
-  # one. If this is the last item, also destroys the pane.
+  # Public: Destroy the given item.
+  #
+  # If the item is active, the next item will be activated. If the item is the
+  # last item, the pane will be destroyed if the `core.destroyEmptyPanes` config
+  # setting is `true`.
+  #
+  # * `item` Item to destroy
   destroyItem: (item) ->
-    if item?
-      @emit 'before-item-destroyed', item
+    index = @items.indexOf(item)
+    if index isnt -1
+      @emit 'before-item-destroyed', item if Grim.includeDeprecatedAPIs
+      @emitter.emit 'will-destroy-item', {item, index}
+      @container?.willDestroyPaneItem({item, index, pane: this})
       if @promptToSaveItem(item)
         @removeItem(item, true)
         item.destroy?()
@@ -203,33 +452,28 @@ class Pane extends Model
       else
         false
 
-  # Public: Destroys all items and destroys the pane.
+  # Public: Destroy all items.
   destroyItems: ->
     @destroyItem(item) for item in @getItems()
+    return
 
-  # Public: Destroys all items but the active one.
+  # Public: Destroy all items except for the active item.
   destroyInactiveItems: ->
     @destroyItem(item) for item in @getItems() when item isnt @activeItem
+    return
 
-  destroy: ->
-    if @container?.isAlive() and @container.getPanes().length is 1
-      @destroyItems()
+  promptToSaveItem: (item, options={}) ->
+    return true unless item.shouldPromptToSave?(options)
+
+    if typeof item.getURI is 'function'
+      uri = item.getURI()
+    else if typeof item.getUri is 'function'
+      uri = item.getUri()
     else
-      super
+      return true
 
-  # Called by model superclass.
-  destroyed: ->
-    @container.activateNextPane() if @isActive()
-    item.destroy?() for item in @items.slice()
-
-  # Public: Prompts the user to save the given item if it can be saved and is
-  # currently unsaved.
-  promptToSaveItem: (item) ->
-    return true unless item.shouldPromptToSave?()
-
-    uri = item.getUri()
     chosen = atom.confirm
-      message: "'#{item.getTitle?() ? item.getUri()}' has changes, do you want to save them?"
+      message: "'#{item.getTitle?() ? uri}' has changes, do you want to save them?"
       detailedMessage: "Your changes will be lost if you close this item without saving."
       buttons: ["Save", "Cancel", "Don't Save"]
 
@@ -238,53 +482,82 @@ class Pane extends Model
       when 1 then false
       when 2 then true
 
-  # Public: Saves the active item.
-  saveActiveItem: ->
-    @saveItem(@activeItem)
+  # Public: Save the active item.
+  saveActiveItem: (nextAction) ->
+    @saveItem(@getActiveItem(), nextAction)
 
-  # Public: Saves the active item at a prompted-for location.
-  saveActiveItemAs: ->
-    @saveItemAs(@activeItem)
-
-  # Public: Saves the specified item.
+  # Public: Prompt the user for a location and save the active item with the
+  # path they select.
   #
-  # item - The item to save.
-  # nextAction - An optional function which will be called after the item is
-  #              saved.
+  # * `nextAction` (optional) {Function} which will be called after the item is
+  #   successfully saved.
+  saveActiveItemAs: (nextAction) ->
+    @saveItemAs(@getActiveItem(), nextAction)
+
+  # Public: Save the given item.
+  #
+  # * `item` The item to save.
+  # * `nextAction` (optional) {Function} which will be called after the item is
+  #   successfully saved.
   saveItem: (item, nextAction) ->
-    if item?.getUri?()
-      item.save?()
+    if typeof item?.getURI is 'function'
+      itemURI = item.getURI()
+    else if typeof item?.getUri is 'function'
+      itemURI = item.getUri()
+
+    if itemURI?
+      try
+        item.save?()
+      catch error
+        @handleSaveError(error, item)
       nextAction?()
     else
       @saveItemAs(item, nextAction)
 
-  # Public: Saves the given item at a prompted-for location.
+  # Public: Prompt the user for a location and save the active item with the
+  # path they select.
   #
-  # item - The item to save.
-  # nextAction - An optional function which will be called after the item is
-  #              saved.
+  # * `item` The item to save.
+  # * `nextAction` (optional) {Function} which will be called after the item is
+  #   successfully saved.
   saveItemAs: (item, nextAction) ->
     return unless item?.saveAs?
 
-    itemPath = item.getPath?()
-    newItemPath = atom.showSaveDialogSync(itemPath)
+    saveOptions = item.getSaveDialogOptions?() ? {}
+    saveOptions.defaultPath ?= item.getPath()
+    newItemPath = atom.showSaveDialogSync(saveOptions)
     if newItemPath
-      item.saveAs(newItemPath)
+      try
+        item.saveAs(newItemPath)
+      catch error
+        @handleSaveError(error, item)
       nextAction?()
 
-  # Public: Saves all items.
+  # Public: Save all items.
   saveItems: ->
     @saveItem(item) for item in @getItems()
+    return
 
-  # Public: Returns the first item that matches the given URI or undefined if
+  # Public: Return the first item that matches the given URI or undefined if
   # none exists.
-  itemForUri: (uri) ->
-    find @items, (item) -> item.getUri?() is uri
+  #
+  # * `uri` {String} containing a URI.
+  itemForURI: (uri) ->
+    find @items, (item) ->
+      if typeof item.getURI is 'function'
+        itemUri = item.getURI()
+      else if typeof item.getUri is 'function'
+        itemUri = item.getUri()
 
-  # Public: Activates the first item that matches the given URI. Returns a
-  # boolean indicating whether a matching item was found.
-  activateItemForUri: (uri) ->
-    if item = @itemForUri(uri)
+      itemUri is uri
+
+  # Public: Activate the first item that matches the given URI.
+  #
+  # * `uri` {String} containing a URI.
+  #
+  # Returns a {Boolean} indicating whether an item matching the URI was found.
+  activateItemForURI: (uri) ->
+    if item = @itemForURI(uri)
       @activateItem(item)
       true
     else
@@ -294,19 +567,63 @@ class Pane extends Model
     if @activeItem?
       @activeItem.copy?() ? atom.deserializers.deserialize(@activeItem.serialize())
 
-  # Public: Creates a new pane to the left of the receiver.
+  ###
+  Section: Lifecycle
+  ###
+
+  # Public: Determine whether the pane is active.
   #
-  # params - An object with keys:
-  #   :items - An optional array of items with which to construct the new pane.
+  # Returns a {Boolean}.
+  isActive: ->
+    @container?.getActivePane() is this
+
+  # Public: Makes this pane the *active* pane, causing it to gain focus.
+  activate: ->
+    throw new Error("Pane has been destroyed") if @isDestroyed()
+
+    @container?.setActivePane(this)
+    @emit 'activated' if Grim.includeDeprecatedAPIs
+    @emitter.emit 'did-activate'
+
+  # Public: Close the pane and destroy all its items.
+  #
+  # If this is the last pane, all the items will be destroyed but the pane
+  # itself will not be destroyed.
+  destroy: ->
+    if @container?.isAlive() and @container.getPanes().length is 1
+      @destroyItems()
+    else
+      @emitter.emit 'will-destroy'
+      @container?.willDestroyPane(pane: this)
+      super
+
+  # Called by model superclass.
+  destroyed: ->
+    @container.activateNextPane() if @isActive()
+    @emitter.emit 'did-destroy'
+    @emitter.dispose()
+    item.destroy?() for item in @items.slice()
+    @container?.didDestroyPane(pane: this)
+
+  ###
+  Section: Splitting
+  ###
+
+  # Public: Create a new pane to the left of this pane.
+  #
+  # * `params` (optional) {Object} with the following keys:
+  #   * `items` (optional) {Array} of items to add to the new pane.
+  #   * `copyActiveItem` (optional) {Boolean} true will copy the active item into the new split pane
   #
   # Returns the new {Pane}.
   splitLeft: (params) ->
     @split('horizontal', 'before', params)
 
-  # Public: Creates a new pane to the right of the receiver.
+  # Public: Create a new pane to the right of this pane.
   #
-  # params - An object with keys:
-  #   :items - An optional array of items with which to construct the new pane.
+  # * `params` (optional) {Object} with the following keys:
+  #   * `items` (optional) {Array} of items to add to the new pane.
+  #   * `copyActiveItem` (optional) {Boolean} true will copy the active item into the new split pane
   #
   # Returns the new {Pane}.
   splitRight: (params) ->
@@ -314,8 +631,9 @@ class Pane extends Model
 
   # Public: Creates a new pane above the receiver.
   #
-  # params - An object with keys:
-  #   :items - An optional array of items with which to construct the new pane.
+  # * `params` (optional) {Object} with the following keys:
+  #   * `items` (optional) {Array} of items to add to the new pane.
+  #   * `copyActiveItem` (optional) {Boolean} true will copy the active item into the new split pane
   #
   # Returns the new {Pane}.
   splitUp: (params) ->
@@ -323,16 +641,22 @@ class Pane extends Model
 
   # Public: Creates a new pane below the receiver.
   #
-  # params - An object with keys:
-  #   :items - An optional array of items with which to construct the new pane.
+  # * `params` (optional) {Object} with the following keys:
+  #   * `items` (optional) {Array} of items to add to the new pane.
+  #   * `copyActiveItem` (optional) {Boolean} true will copy the active item into the new split pane
   #
   # Returns the new {Pane}.
   splitDown: (params) ->
     @split('vertical', 'after', params)
 
   split: (orientation, side, params) ->
+    if params?.copyActiveItem
+      params.items ?= []
+      params.items.push(@copyActiveItem())
+
     if @parent.orientation isnt orientation
-      @parent.replaceChild(this, new PaneAxis({@container, orientation, children: [this]}))
+      @parent.replaceChild(this, new PaneAxis({@container, orientation, children: [this], @flexScale}))
+      @setFlexScale(1)
 
     newPane = new @constructor(params)
     switch side
@@ -365,3 +689,102 @@ class Pane extends Model
         rightmostSibling
     else
       @splitRight()
+
+  close: ->
+    @destroy() if @confirmClose()
+
+  confirmClose: ->
+    for item in @getItems()
+      return false unless @promptToSaveItem(item)
+    true
+
+  handleSaveError: (error, item) ->
+    itemPath = error.path ? item?.getPath?()
+    addWarningWithPath = (message, options) ->
+      message = "#{message} '#{itemPath}'" if itemPath
+      atom.notifications.addWarning(message, options)
+
+    if error.code is 'EISDIR' or error.message?.endsWith?('is a directory')
+      atom.notifications.addWarning("Unable to save file: #{error.message}")
+    else if error.code is 'EACCES'
+      addWarningWithPath('Unable to save file: Permission denied')
+    else if error.code in ['EPERM', 'EBUSY', 'UNKNOWN', 'EEXIST']
+      addWarningWithPath('Unable to save file', detail: error.message)
+    else if error.code is 'EROFS'
+      addWarningWithPath('Unable to save file: Read-only file system')
+    else if error.code is 'ENOSPC'
+      addWarningWithPath('Unable to save file: No space left on device')
+    else if error.code is 'ENXIO'
+      addWarningWithPath('Unable to save file: No such device or address')
+    else if error.code is 'ENOTSUP'
+      addWarningWithPath('Unable to save file: Operation not supported on socket')
+    else if error.code is 'EIO'
+      addWarningWithPath('Unable to save file: I/O error writing file')
+    else if error.code is 'EINTR'
+      addWarningWithPath('Unable to save file: Interrupted system call')
+    else if error.code is 'ECONNRESET'
+      addWarningWithPath('Unable to save file: Connection reset')
+    else if error.code is 'ESPIPE'
+      addWarningWithPath('Unable to save file: Invalid seek')
+    else if errorMatch = /ENOTDIR, not a directory '([^']+)'/.exec(error.message)
+      fileName = errorMatch[1]
+      atom.notifications.addWarning("Unable to save file: A directory in the path '#{fileName}' could not be written to")
+    else
+      throw error
+
+if Grim.includeDeprecatedAPIs
+  Pane.properties
+    container: undefined
+    activeItem: undefined
+    focused: false
+
+  Pane.behavior 'active', ->
+    @$container
+      .switch((container) -> container?.$activePane)
+      .map((activePane) => activePane is this)
+      .distinctUntilChanged()
+
+  Pane::on = (eventName) ->
+    switch eventName
+      when 'activated'
+        Grim.deprecate("Use Pane::onDidActivate instead")
+      when 'destroyed'
+        Grim.deprecate("Use Pane::onDidDestroy instead")
+      when 'item-added'
+        Grim.deprecate("Use Pane::onDidAddItem instead")
+      when 'item-removed'
+        Grim.deprecate("Use Pane::onDidRemoveItem instead")
+      when 'item-moved'
+        Grim.deprecate("Use Pane::onDidMoveItem instead")
+      when 'before-item-destroyed'
+        Grim.deprecate("Use Pane::onWillDestroyItem instead")
+      else
+        Grim.deprecate("Subscribing via ::on is deprecated. Use documented event subscription methods instead.")
+    super
+
+  Pane::behavior = (behaviorName) ->
+    switch behaviorName
+      when 'active'
+        Grim.deprecate("The $active behavior property is deprecated. Use ::observeActive or ::onDidChangeActive instead.")
+      when 'container'
+        Grim.deprecate("The $container behavior property is deprecated.")
+      when 'activeItem'
+        Grim.deprecate("The $activeItem behavior property is deprecated. Use ::observeActiveItem or ::onDidChangeActiveItem instead.")
+      when 'focused'
+        Grim.deprecate("The $focused behavior property is deprecated.")
+      else
+        Grim.deprecate("Pane::behavior is deprecated. Use event subscription methods instead.")
+
+    super
+
+  Pane::itemForUri = (uri) ->
+    Grim.deprecate("Use `::itemForURI` instead.")
+    @itemForURI(uri)
+
+  Pane::activateItemForUri = (uri) ->
+    Grim.deprecate("Use `::activateItemForURI` instead.")
+    @activateItemForURI(uri)
+else
+  Pane::container = undefined
+  Pane::activeItem = undefined
+  Pane::focused = undefined
